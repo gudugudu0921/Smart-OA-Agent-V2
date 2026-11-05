@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      APP_ENV: test
+      MYSQL_USER: ci_user
+      MYSQL_PASSWORD: ci-only-not-a-real-secret
+      JWT_SECRET_KEY: ci-only-random-placeholder-for-isolated-tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m unittest discover -s tests -v
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.19.0'
+      - run: npm install --global pnpm@11.19.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+
+  compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create disposable CI configuration
+        run: cp .env.example .env
+      - name: Validate configuration
+        run: docker compose config --quiet
+      - name: Build and start fresh stack
+        run: docker compose up -d --build --wait --wait-timeout 240
+      - name: Check public endpoints
+        run: |
+          curl --fail --silent --show-error http://localhost:8080/ > /dev/null
+          python3 - <<'PY'
+          import json
+          import urllib.request
+          for endpoint, expected in [('health', 'ok'), ('ready', 'ready')]:
+              with urllib.request.urlopen(f'http://localhost:8080/api/{endpoint}', timeout=10) as response:
+                  payload = json.load(response)
+              assert payload['status'] == expected, payload
+              print(endpoint, payload)
+          PY
+      - name: Verify bootstrap and approval through real services
+        run: docker compose exec -T -e RELEASE_SMOKE_TEST=1 backend python - < scripts/verify-fresh-install.py
+      - name: Show service status on failure
+        if: failure()
+        run: docker compose ps -a
+      - name: Remove disposable CI volumes
+        if: always()
+        run: docker compose down --volumes --remove-orphans

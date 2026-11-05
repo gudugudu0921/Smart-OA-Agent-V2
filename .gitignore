@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Frontend
+node_modules/
+dist/
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Backups / dumps
+backups/
+*.dump
+*.bak
+*.sql.bak
+
+# Local databases
+*.sqlite
+*.sqlite3
+*.db
+
+# Secrets / certificates
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Temporary files
+*.tmp
+*.temp
+
+# Python packaging / coverage
+*.egg-info/
+coverage.xml
+
+# pnpm
+.pnpm-store/
+
+# Local Phase 3 integration run ledgers
+backend/tests/integration/phase3_*_state.json
+
+# Local interview materials
+docs/INTERVIEW_DEMO.md
+docs/INTERVIEW_TECH_QA.md

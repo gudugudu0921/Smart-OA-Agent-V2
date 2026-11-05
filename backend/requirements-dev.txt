@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# FastAPI/Starlette TestClient transport used by the unittest suite.
+httpx==0.28.1

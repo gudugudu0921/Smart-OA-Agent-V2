@@ -1,0 +1,17 @@
+# Runtime baseline: Python >=3.11,<3.12
+fastapi==0.141.1
+uvicorn==0.53.0
+pydantic-settings==2.15.0
+pymysql==1.2.0
+sqlalchemy==2.0.54
+redis==8.1.0
+python-jose==3.5.0
+passlib==1.7.4
+bcrypt==5.0.0
+langchain==1.4.0
+langgraph==1.2.11
+langchain-openai==1.6.2
+sse-starlette==3.4.11
+python-dotenv==1.2.3
+python-multipart==0.0.32
+email-validator==2.3.0
