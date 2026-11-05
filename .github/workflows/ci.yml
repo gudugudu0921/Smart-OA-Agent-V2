@@ -55,7 +55,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Create disposable CI configuration
-        run: cp .env.example .env
+        run: |
+          umask 077
+          mysql_password="$(openssl rand -hex 32)"
+          mysql_root_password="$(openssl rand -hex 32)"
+          redis_password="$(openssl rand -hex 32)"
+          jwt_secret="$(openssl rand -hex 32)"
+          cat > .env <<EOF
+          APP_NAME=Smart OA Agent CI
+          APP_ENV=test
+          APP_HTTP_PORT=8080
+          CORS_ORIGINS=http://localhost:8080
+          MYSQL_DATABASE=smart_oa
+          MYSQL_USER=smart_oa_ci
+          MYSQL_PASSWORD=${mysql_password}
+          MYSQL_ROOT_PASSWORD=${mysql_root_password}
+          REDIS_PASSWORD=${redis_password}
+          REDIS_DB=0
+          REDIS_KEY_PREFIX=smart_oa_ci
+          SESSION_TTL_SECONDS=2592000
+          JWT_SECRET_KEY=${jwt_secret}
+          JWT_ALGORITHM=HS256
+          JWT_ACCESS_TOKEN_EXPIRE_MINUTES=30
+          LLM_API_KEY=ci-invalid-placeholder
+          LLM_BASE_URL=http://127.0.0.1:9/v1
+          LLM_MODEL=ci-disabled
+          EOF
+          unset mysql_password mysql_root_password redis_password jwt_secret
       - name: Validate configuration
         run: docker compose config --quiet
       - name: Build and start fresh stack
