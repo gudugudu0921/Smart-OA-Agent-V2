@@ -32,6 +32,11 @@ from redis.exceptions import RedisError, WatchError
 from sqlalchemy.orm import Session
 
 from app.agents.chat_state import ChatState
+from app.agents.observability import (
+    build_tool_call_observer,
+    observe_graph,
+    observe_node,
+)
 from app.agents.recognition import recognize_intent
 from app.core.llm import LLMConfigurationError, LLMUnavailableError, get_llm
 from app.db.redis import (
@@ -2173,6 +2178,10 @@ def _generate_response_node(state: ChatState) -> dict:
     return updates
 
 
+def _add_observed_node(graph: StateGraph, node_name: str, node: Any) -> None:
+    graph.add_node(node_name, observe_node(node_name, node))
+
+
 def build_chat_graph(
     context: AgentExecutionContext,
     recognizer: Callable[[ChatState], dict] | None = None,
@@ -2258,44 +2267,51 @@ def build_chat_graph(
         return {"tool_name": None, "tool_result": {"success": True, "data": None}}
 
     graph = StateGraph(ChatState)
-    graph.add_node("normalize_task_state", _normalize_task_state_node)
-    graph.add_node("confirm_submit_leave", _confirm_submit_leave_node)
-    graph.add_node("cancel_submit_leave_task", _cancel_submit_leave_task_node)
-    graph.add_node("recognize_intent", recognize_node)
-    graph.add_node(
+    _add_observed_node(graph, "normalize_task_state", _normalize_task_state_node)
+    _add_observed_node(graph, "confirm_submit_leave", _confirm_submit_leave_node)
+    _add_observed_node(
+        graph, "cancel_submit_leave_task", _cancel_submit_leave_task_node
+    )
+    _add_observed_node(graph, "recognize_intent", recognize_node)
+    _add_observed_node(
+        graph,
         "validate_request",
         lambda state: _validate_request_node(state, context),
     )
-    graph.add_node("route_intent", _route_intent_node)
-    graph.add_node("submit_leave", submit_leave_node)
+    _add_observed_node(graph, "route_intent", _route_intent_node)
+    _add_observed_node(graph, "submit_leave", submit_leave_node)
     for intent, (tool, prompt) in query_tools.items():
-        graph.add_node(intent, make_query_tool_call_node(tool, prompt))
-        graph.add_node(
+        _add_observed_node(graph, intent, make_query_tool_call_node(tool, prompt))
+        _add_observed_node(
+            graph,
             f"validate_{intent}_tool_call",
             lambda state, expected_tool=tool: _validate_query_tool_call_node(
                 state,
                 expected_tool,
             ),
         )
-        graph.add_node(
+        _add_observed_node(
+            graph,
             f"{intent}_tool",
             ToolNode(
                 [tool],
                 handle_tool_errors="查询服务暂时不可用，请稍后重试。",
+                wrap_tool_call=build_tool_call_observer(),
             ),
         )
-        graph.add_node(
+        _add_observed_node(
+            graph,
             f"collect_{intent}_tool_result",
             lambda state, expected_tool=tool: _collect_query_tool_result_node(
                 state,
                 expected_tool,
             ),
         )
-    graph.add_node("cancel_leave", cancel_leave_node)
-    graph.add_node("manager_review", manager_review_node)
-    graph.add_node("hr_review", hr_review_node)
-    graph.add_node("general_chat", general_chat_node)
-    graph.add_node("generate_response", _generate_response_node)
+    _add_observed_node(graph, "cancel_leave", cancel_leave_node)
+    _add_observed_node(graph, "manager_review", manager_review_node)
+    _add_observed_node(graph, "hr_review", hr_review_node)
+    _add_observed_node(graph, "general_chat", general_chat_node)
+    _add_observed_node(graph, "generate_response", _generate_response_node)
     graph.add_edge(START, "normalize_task_state")
     graph.add_conditional_edges(
         "normalize_task_state",
@@ -2347,7 +2363,7 @@ def _publish_task_updates(
 ) -> ChatState:
     """Publish one state-only transition without appending another user message."""
     update_graph = StateGraph(ChatState)
-    update_graph.add_node("apply_task_update", lambda _state: updates)
+    _add_observed_node(update_graph, "apply_task_update", lambda _state: updates)
     update_graph.add_edge(START, "apply_task_update")
     update_graph.add_edge("apply_task_update", END)
     buffered = (
@@ -2356,7 +2372,14 @@ def _publish_task_updates(
         else None
     )
     graph = update_graph.compile(checkpointer=buffered or base_checkpointer)
-    result = graph.invoke({}, config={"configurable": {"thread_id": thread_id}})
+    with observe_graph(
+        "task_update",
+        thread_id=thread_id,
+        message_request_id=updates.get("message_request_id"),
+        operation_id=updates.get("active_operation_id")
+        or updates.get("response_operation_id"),
+    ):
+        result = graph.invoke({}, config={"configurable": {"thread_id": thread_id}})
     if buffered is not None:
         buffered.flush()
     return result
@@ -2481,17 +2504,19 @@ def _execute_confirmed_write_tool_via_toolnode(
         return {**updates, "messages": [AIMessage(content=updates["response"])]}
 
     graph = StateGraph(ChatState)
-    graph.add_node("request_write_tool_call", request_tool_call)
-    graph.add_node("validate_write_tool_call", validate_tool_call)
-    graph.add_node(
+    _add_observed_node(graph, "request_write_tool_call", request_tool_call)
+    _add_observed_node(graph, "validate_write_tool_call", validate_tool_call)
+    _add_observed_node(
+        graph,
         "confirmed_write_tool",
         ToolNode(
             [write_tool],
             handle_tool_errors=unavailable_message,
+            wrap_tool_call=build_tool_call_observer(),
         ),
     )
-    graph.add_node("collect_write_tool_result", collect_tool_result)
-    graph.add_node("finalize_write_tool_result", finalize)
+    _add_observed_node(graph, "collect_write_tool_result", collect_tool_result)
+    _add_observed_node(graph, "finalize_write_tool_result", finalize)
     graph.add_edge(START, "request_write_tool_call")
     graph.add_edge("request_write_tool_call", "validate_write_tool_call")
     graph.add_conditional_edges(
@@ -2513,7 +2538,13 @@ def _execute_confirmed_write_tool_via_toolnode(
         "error": None,
         "response": "",
     }
-    return graph.compile().invoke(isolated_input)
+    with observe_graph(
+        "confirmed_write",
+        thread_id=state.get("thread_id"),
+        message_request_id=state.get("message_request_id"),
+        operation_id=state.get("active_operation_id"),
+    ):
+        return graph.compile().invoke(isolated_input)
 
 
 def _execute_confirmed_cancel_leave_via_toolnode(
@@ -2748,9 +2779,14 @@ def run_chat_agent(
         "response_confirmation": None,
         "code": None,
     }
-    result = graph.invoke(
-        turn_input, config={"configurable": {"thread_id": thread_id}}
-    )
+    with observe_graph(
+        "main_chat",
+        thread_id=thread_id,
+        message_request_id=message_request_id,
+    ):
+        result = graph.invoke(
+            turn_input, config={"configurable": {"thread_id": thread_id}}
+        )
     if buffered_checkpointer is not None:
         buffered_checkpointer.flush()
     if task_action != "confirm" or result.get("code") not in {

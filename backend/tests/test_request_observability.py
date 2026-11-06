@@ -68,6 +68,10 @@ class RequestIdTests(unittest.TestCase):
         handler = logging.StreamHandler(stream)
         handler.setFormatter(JsonLogFormatter())
         logger = logging.getLogger("app.request")
+        old_level = logger.level
+        old_propagate = logger.propagate
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
         logger.addHandler(handler)
         try:
             response = self.client.post(
@@ -80,8 +84,11 @@ class RequestIdTests(unittest.TestCase):
             )
         finally:
             logger.removeHandler(handler)
+            logger.setLevel(old_level)
+            logger.propagate = old_propagate
         self.assertEqual(response.status_code, 200)
         entries = [json.loads(line) for line in stream.getvalue().splitlines()]
+        self.assertTrue(entries, "expected an HTTP request log entry")
         entry = entries[-1]
         self.assertEqual(entry["request_id"], "safe-log-id")
         self.assertEqual(entry["path"], "/context")

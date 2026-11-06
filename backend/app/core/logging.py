@@ -11,6 +11,18 @@ from app.core.request_context import get_request_id
 
 
 _STRUCTURED_FIELDS = (
+    "event_type",
+    "status",
+    "graph_scope",
+    "graph_run_id",
+    "node_run_id",
+    "event_seq",
+    "node_name",
+    "tool_name",
+    "tool_call_id",
+    "thread_id",
+    "message_request_id",
+    "operation_id",
     "method",
     "path",
     "status_code",
